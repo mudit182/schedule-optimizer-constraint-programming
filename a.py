@@ -43,16 +43,15 @@ class ScheduleTasks:
                 if self.Value(activityVar.isPresent):
                     print('At ' + str(self.Value(activityVar.start)) +
                         '\tfor: ' + str(activityVar.data.duration) +
-                        '\t\tpriority: ' + str(activityVar.data.priority) + '\tpresent: ' + str(self.Value(activityVar.isPresent)) +
+                        '\t\tpriority: ' + str(activityVar.data.priority) +
                         '\t' + activityVar.data.name)
             print()
             for activityVar in sortedActivities:
                 if not self.Value(activityVar.isPresent):
                     print('At ' + str(self.Value(activityVar.start)) +
                         '\tfor: ' + str(activityVar.data.duration) +
-                        '\t\tpriority: ' + str(activityVar.data.priority) + '\tpresent: ' + str(self.Value(activityVar.isPresent)) +
+                        '\t\tpriority: ' + str(activityVar.data.priority) +
                         '\t' + activityVar.data.name + '\t\tNot fitted')
-
             print('**************************')
 
         def solutionCount(self):
@@ -109,15 +108,19 @@ class ScheduleTasks:
 
         # Adding penalty to activities for not being present
         activitiesNotPresentPenalty = self.getActivitiesNotPresentPenalty()
-        finalObjVar += 5 * activitiesNotPresentPenalty
+        finalObjVar += 100 * activitiesNotPresentPenalty
 
         # Adding penalty to activities which switch order
         activitiesOrderChangedPenalty = self.getActivitiesOrderChangedPenalty()
-        finalObjVar += 20 * activitiesOrderChangedPenalty
+        finalObjVar += 50 * activitiesOrderChangedPenalty
 
-        # Adding penalty for activities for not being pushed towards the front
+        # Adding penalty for activities for not starting immediately after the next one
         activitiesNotPushedFrontPenalty = self.getActivitiesNotPushedFrontPenalty()
         finalObjVar += activitiesNotPushedFrontPenalty
+
+        # Adding penalty for activities not being pushed towards the front
+        activitiesStartTimeBackPenalty = self.getActivitiesStartTimeBackPenalty()
+        finalObjVar += activitiesStartTimeBackPenalty
 
         return finalObjVar
 
@@ -133,7 +136,9 @@ class ScheduleTasks:
             nextActStartDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
             self.model.Add(nextActStartDif == self.activityVars[i].start - self.activityVars[i+1].start)
             nextActStartDifPosIndicator = self.getPositiveIndicatorForVariable(nextActStartDif, -self.endScheduleTime, self.endScheduleTime)
-            nextElementBefore.append(nextActStartDifPosIndicator)
+            nextActStartDifPosIndicatorIfActPresent = self.model.NewIntVar(0, 1, '')
+            self.model.AddProdEquality(nextActStartDifPosIndicatorIfActPresent, [nextActStartDifPosIndicator, self.activityVars[i].isPresent])
+            nextElementBefore.append(nextActStartDifPosIndicatorIfActPresent)
         return sum(nextElementBefore)
 
     def getPositiveIndicatorForVariable(self, var, varLb, varUb):
@@ -150,7 +155,7 @@ class ScheduleTasks:
         self.model.AddDivisionEquality(indicator, doubleIndicator, 2)
         return indicator
 
-    def getActivitiesNotPushedFrontPenalty(self):
+    def getActivitiesStartTimeBackPenalty(self):
         # The further the activity start time, the bigger the penalty
         presentIntervalsStart = []
         for actVar in self.activityVars:
@@ -159,6 +164,35 @@ class ScheduleTasks:
             presentIntervalsStart.append(isPresentStart)
         return sum([start for start in presentIntervalsStart])
 
+    def getActivitiesNotPushedFrontPenalty(self):
+        actStartAndPreviousActEndDifs = []
+        for actVar in self.activityVars:
+            actStartAndAllActsEndDifs = []
+            actStartAndAllActsEndDifs.append(actVar.start)
+            for actVar2 in self.activityVars:
+                if not actVar == actVar2:
+                    # Define variable that tracks actVar1 - actVar2
+                    act1StartAct2EndDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
+                    self.model.Add(act1StartAct2EndDif == actVar.start - actVar2.end)
+                    # Define variable that tracks when (actVar1 - actVar2) < 0
+                    negAct1StartAct2EndDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
+                    self.model.Add(negAct1StartAct2EndDif == -act1StartAct2EndDif)
+                    act1StartAct2EndDifNegIndicator = self.getPositiveIndicatorForVariable(negAct1StartAct2EndDif, -self.endScheduleTime, self.endScheduleTime)
+                    # Define variable v  
+                    #                   = (actVar1 - actVar2) if (actVar1 - actVar2) >= 0
+                    #                   > self.endScheduleTime if (actVar1 - actVar2) < 0
+                    intermediate = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
+                    self.model.AddProdEquality(intermediate, [act1StartAct2EndDifNegIndicator, 2*self.endScheduleTime])
+                    act1StartAct2EndDifIfPositive = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
+                    self.model.Add(act1StartAct2EndDifIfPositive == act1StartAct2EndDif + intermediate)
+                    act1StartAct2EndDifIfPositiveAndPresent = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
+                    self.model.AddProdEquality(act1StartAct2EndDifIfPositiveAndPresent, [act1StartAct2EndDifIfPositiveAndPresent, actVar.isPresent])
+                    actStartAndAllActsEndDifs.append(act1StartAct2EndDifIfPositive)
+            actStartAndPreviousActEndDif = self.model.NewIntVar(0, self.endScheduleTime, '')
+            self.model.AddMinEquality(actStartAndPreviousActEndDif, actStartAndAllActsEndDifs)
+            actStartAndPreviousActEndDifs.append(actStartAndPreviousActEndDif)
+        return sum(actStartAndPreviousActEndDifs)
+
 
 # For now, one time unit is 5 min so 12 units / hour
 # Time period is 10 hours
@@ -166,7 +200,7 @@ scheduleTimeUnits = 120
 
 scheduler = ScheduleTasks(scheduleTimeUnits)
 
-scheduler.addActivities(case1)
+scheduler.addActivities(case3)
 
 scheduler.solve()
 

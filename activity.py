@@ -5,7 +5,7 @@ class ActivityGroup:
     end = {}
 
     email = 'email'
-    start[email] = 30
+    start[email] = 40
     end[email] = 80
 
     call = 'call'
@@ -30,17 +30,17 @@ class Activity:
 # Activities to test model with
 
 # Case to test that activities are pushed to front and order is maintained
-# Unless activity time is 20 less than previous one
 case1 = [
-    Activity('A', 20),
+    Activity('A', 95),
     Activity('B', 2),
-    Activity('C', 25),
+    Activity('C', 15),
     Activity('D', 4)
 ]
 
 
 # Case to test that activities with higher priority are scheduled over activities with lower priorities
-# Notice that Activity D is selected instead of Activity F (both have same priority)
+# Notice that Activity D is scheduled instead of Activity F 
+# (both D and F have same priority and duration but D is defined before)
 case2 = [
     Activity('A', 29, priority=5),
     Activity('B', 29, priority=2),
