@@ -2,7 +2,7 @@ import collections
 from ortools.sat.python import cp_model
 
 from activity import ActivityGroup
-from activity import case1, case2, case3
+from activity import case1, case2, case3, case4, case5, case6, case7, case8, case9, case10
 
 
 
@@ -112,15 +112,11 @@ class ScheduleTasks:
 
         # Adding penalty to activities which switch order
         activitiesOrderChangedPenalty = self.getActivitiesOrderChangedPenalty()
-        finalObjVar += 50 * activitiesOrderChangedPenalty
+        finalObjVar += activitiesOrderChangedPenalty
 
         # Adding penalty for activities for not starting immediately after the next one
-        activitiesNotPushedFrontPenalty = self.getActivitiesNotPushedFrontPenalty()
+        activitiesNotPushedFrontPenalty = self.getActivitiesInBetweenGapsPenalty()
         finalObjVar += activitiesNotPushedFrontPenalty
-
-        # Adding penalty for activities not being pushed towards the front
-        activitiesStartTimeBackPenalty = self.getActivitiesStartTimeBackPenalty()
-        finalObjVar += activitiesStartTimeBackPenalty
 
         return finalObjVar
 
@@ -155,42 +151,68 @@ class ScheduleTasks:
         self.model.AddDivisionEquality(indicator, doubleIndicator, 2)
         return indicator
 
-    def getActivitiesStartTimeBackPenalty(self):
-        # The further the activity start time, the bigger the penalty
-        presentIntervalsStart = []
-        for actVar in self.activityVars:
-            isPresentStart = self.model.NewIntVar(0, self.endScheduleTime, '')
-            self.model.AddProdEquality(isPresentStart, [actVar.start, actVar.isPresent])
-            presentIntervalsStart.append(isPresentStart)
-        return sum([start for start in presentIntervalsStart])
-
-    def getActivitiesNotPushedFrontPenalty(self):
+    # Get the sum of gaps between each activity intervals (to be used as penalty for objective function minimization)
+    def getActivitiesInBetweenGapsPenalty(self):
+        # actStartAndPreviousActEndDifs will contain lag time for each activity - free time between one activity and the next
         actStartAndPreviousActEndDifs = []
+        # Each iteration of the loop determines the lag time for that activity
+        # In Short - For each activity (actVar), the algorithm calculates the difference: 
+        # d = (actVar.start - actVar2.end) where actVar2 is all the other activities
+        # The lagtime will be equal to the minimum of all these positive differences
+        # lagtime = min( d for all d > 0 )
         for actVar in self.activityVars:
+            # Array that will contain all the difference d = (actVar - actVar2) if d > 0
             actStartAndAllActsEndDifs = []
+            # Array that will contain bool indicating whether actVar2 comes after actVar
+            # Sum of this array will be used as weight for lag time
+            # This will push activities in reducing lag time with previous activity rather than the next activity
+            act2AfterAct = []
+            # Add start time to this array which will be the lag time if this is the first activity
             actStartAndAllActsEndDifs.append(actVar.start)
             for actVar2 in self.activityVars:
                 if not actVar == actVar2:
-                    # Define variable that tracks actVar1 - actVar2
+                    # Define variable a with constraint a == -(actVar - actVar2)
                     act1StartAct2EndDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
                     self.model.Add(act1StartAct2EndDif == actVar.start - actVar2.end)
-                    # Define variable that tracks when (actVar1 - actVar2) < 0
-                    negAct1StartAct2EndDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
-                    self.model.Add(negAct1StartAct2EndDif == -act1StartAct2EndDif)
-                    act1StartAct2EndDifNegIndicator = self.getPositiveIndicatorForVariable(negAct1StartAct2EndDif, -self.endScheduleTime, self.endScheduleTime)
-                    # Define variable v  
-                    #                   = (actVar1 - actVar2) if (actVar1 - actVar2) >= 0
-                    #                   > self.endScheduleTime if (actVar1 - actVar2) < 0
-                    intermediate = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
-                    self.model.AddProdEquality(intermediate, [act1StartAct2EndDifNegIndicator, 2*self.endScheduleTime])
+                    # Also define (-a) necessary for subsequent steps
+                    act2EndAct1StartDif = self.model.NewIntVar(-self.endScheduleTime, self.endScheduleTime, '')
+                    self.model.Add(act2EndAct1StartDif == -act1StartAct2EndDif)
+                    # Define bool variable b such that b = 1 iff -a > 0
+                    # In other words, b = 1 iff a >= 0
+                    # Or, more importantly b = 0 iff (actVar - actVar2) < 0
+                    act1StartAct2EndDifNegIndicator = self.getPositiveIndicatorForVariable(act2EndAct1StartDif, -self.endScheduleTime, self.endScheduleTime)
+                    act2AfterAct.append(act1StartAct2EndDifNegIndicator)
+                    # Define variable m
+                    #                   = 0 if (actVar - actVar2) >= 0
+                    #                   = 2 * self.endScheduleTime if (actVar - actVar2) < 0
+                    doubleEndScheduleOrNothing = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
+                    self.model.AddProdEquality(doubleEndScheduleOrNothing, [act1StartAct2EndDifNegIndicator, 2*self.endScheduleTime])
+                    # Define variable n = (actVar - actVar2) + m
+                    #                   = (actVar - actVar2)    if (actVar - actVar2) >= 0
+                    #                   > self.endScheduleTime  if (actVar1 - actVar2) < 0
                     act1StartAct2EndDifIfPositive = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
-                    self.model.Add(act1StartAct2EndDifIfPositive == act1StartAct2EndDif + intermediate)
+                    self.model.Add(act1StartAct2EndDifIfPositive == act1StartAct2EndDif + doubleEndScheduleOrNothing)
+                    # Finally the variable we want:
+                    # Define p = n * actVar.isPresent
+                    #                   = (actVar - actVar2)    if (actVar - actVar2) >= 0 and actVar.isPresent == 1
+                    #                   > self.endScheduleTime  if (actVar - actVar2) <  and actVar.isPresent == 1
+                    #                   = 0                     if actVar.isPresent == 0
                     act1StartAct2EndDifIfPositiveAndPresent = self.model.NewIntVar(0, 2*self.endScheduleTime, '')
                     self.model.AddProdEquality(act1StartAct2EndDifIfPositiveAndPresent, [act1StartAct2EndDifIfPositiveAndPresent, actVar.isPresent])
+                    # Append to array that will contain all p's to later minimize
                     actStartAndAllActsEndDifs.append(act1StartAct2EndDifIfPositive)
+            # define variable s = minimum(all p and startTime )
+            # In other words s = minimum of actVar - actVar2 such that (actVar - actVar2 > 0)
+            # So s is the lag time for this activity actVar
             actStartAndPreviousActEndDif = self.model.NewIntVar(0, self.endScheduleTime, '')
             self.model.AddMinEquality(actStartAndPreviousActEndDif, actStartAndAllActsEndDifs)
-            actStartAndPreviousActEndDifs.append(actStartAndPreviousActEndDif)
+            # We define the weight w = sum(act2 such that act2 > 0)
+            actNumOfActsAfter = self.model.NewIntVar(0, len(self.activityVars), '')
+            self.model.Add(actNumOfActsAfter == 1 + sum(act2AfterAct))
+            # Multiply s and w to obtain weighted lag time, which is basically the penalty for this activity
+            actStartAndPreviousActEndDifWeighted = self.model.NewIntVar(0, len(self.activityVars)*self.endScheduleTime, '')
+            self.model.AddProdEquality(actStartAndPreviousActEndDifWeighted, [actStartAndPreviousActEndDif, actNumOfActsAfter])
+            actStartAndPreviousActEndDifs.append(actStartAndPreviousActEndDifWeighted)
         return sum(actStartAndPreviousActEndDifs)
 
 
@@ -200,7 +222,7 @@ scheduleTimeUnits = 120
 
 scheduler = ScheduleTasks(scheduleTimeUnits)
 
-scheduler.addActivities(case3)
+scheduler.addActivities(case9)
 
 scheduler.solve()
 

@@ -27,3 +27,12 @@
     #         breakBeforeAct = self.model.NewIntVar(0, self.endScheduleTime, 'break before ' + str(i))
     #         breakBeforeActivities.append(breakBeforeAct)
     #     return sum(breakBeforeActivities)
+
+    # def getActivitiesStartTimeBackPenalty(self):
+    #     # The further the activity start time, the bigger the penalty
+    #     presentIntervalsStart = []
+    #     for actVar in self.activityVars:
+    #         isPresentStart = self.model.NewIntVar(0, self.endScheduleTime, '')
+    #         self.model.AddProdEquality(isPresentStart, [actVar.start, actVar.isPresent])
+    #         presentIntervalsStart.append(isPresentStart)
+    #     return sum([start for start in presentIntervalsStart])
