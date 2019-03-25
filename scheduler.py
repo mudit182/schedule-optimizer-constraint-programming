@@ -1,9 +1,9 @@
 import collections
+import time
 from ortools.sat.python import cp_model
 
 from activity import ActivityGroup
-from activity import case1, case2, case3, case4, case5, case6, case7, case8, case9, case10
-
+from activity import case1, case2, case3, case4, case5, case6, case7, case8, case9, case10, case11
 
 
 class ScheduleTasks:
@@ -63,11 +63,15 @@ class ScheduleTasks:
         solutionPrinter = self.ScheduleTasksSolutionsPrinter(self.activityVars, self.objVar, self.extraVariables)
         # solve
         # status = self.solver.SearchForAllSolutions(self.model, solutionPrinter)
+
+        start = time.time()
         status = self.solver.SolveWithSolutionCallback(self.model, solutionPrinter)
+        end = time.time()
 
         # Print status and num of solutions
         print('Status = %s' % self.solver.StatusName(status))
         print('Number of solutions found: %i' % solutionPrinter.solutionCount())
+        print('Time Taken: ', round(end-start, 3), 'seconds')
 
     def addActivities(self, activities):
         # creating on the fly class to store activity variables
@@ -99,6 +103,8 @@ class ScheduleTasks:
         intervalVars = [activityVar.interval for activityVar in self.activityVars]
         self.model.AddNoOverlap(intervalVars)
 
+        # Main objective function that penalizes unwanted behavior
+        # OR-Tools library will minimize this function to find the optimal solution
         self.objVar = self.cpObjectiveFunction()
         self.model.Minimize(self.objVar)
 
@@ -144,7 +150,7 @@ class ScheduleTasks:
         doubleOrNothing = self.model.NewIntVar(0, int(2 * ub), '')
         self.model.Add(doubleOrNothing == varAbs + var)
         doubleIndicator = self.model.NewIntVar(0, 2, '')
-        avoidZero = self.model.NewIntVar(0, ub, '')
+        avoidZero = self.model.NewIntVar(1, ub, '')
         self.model.AddMaxEquality(avoidZero, [varAbs, 1])
         self.model.AddDivisionEquality(doubleIndicator, doubleOrNothing, avoidZero)
         indicator = self.model.NewIntVar(0, 1, '')
@@ -222,7 +228,7 @@ scheduleTimeUnits = 120
 
 scheduler = ScheduleTasks(scheduleTimeUnits)
 
-scheduler.addActivities(case9)
+scheduler.addActivities(case10)
 
 scheduler.solve()
 

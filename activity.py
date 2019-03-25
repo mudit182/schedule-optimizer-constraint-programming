@@ -127,20 +127,17 @@ case9 = [
     Activity('H', 29, priority=4),
 ]
 
-case10 = []
+case10 = [
+    Activity('A', 10),
+    Activity('B', 9, group=ActivityGroup.email),
+    Activity('C', 3, group=ActivityGroup.email),
+    Activity('D', 14),
+    Activity('E', 9),
+    Activity('F', 5, group=ActivityGroup.email),
+]
+
 case11 = []
 
-
-# # Case to test grouped activities get scheduled in prefered slot 
-
-# case6 = [
-#     Activity('A', 7),
-#     Activity('B', 9, group=ActivityGroup.email),
-#     Activity('C', 3, group=ActivityGroup.email),
-#     Activity('D', 14),
-#     Activity('E', 9),
-#     Activity('F', 5, group=ActivityGroup.email),
-# ]
 
 
 
