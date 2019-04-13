@@ -2,34 +2,39 @@ import collections
 import time
 from ortools.sat.python import cp_model
 
-from activity import ActivityGroup
-from activity import case1, case2, case3, case4, case5, case6, case7, case8, case9, case10, case11
-
 
 class ScheduleTasks:
 
-    def __init__(self, timeUnits):
-        # Fix period over which optimization must
-        self.startScheduleTime = 0
-        self.endScheduleTime = timeUnits
-        # Create variables array
-        self.activityVars = []
-        self.objVar = None
-        # Creates the model
+    def __init__(self, userData):
+        self.userData = userData
+        # Initialize OR-Tools model and solver
         self.model = cp_model.CpModel()
-        # Creates the solver
         self.solver = cp_model.CpSolver()
-        # Extra variables to pass to solution printer
+
+        # Set overall time interval inside of which all activities must be scheduled
+        self.startScheduleTime = userData['schedule-time'][0].startTime
+        self.endScheduleTime = userData['schedule-time'][0].endTime
+
+        # Create container for activity variables
+        self.activityVars = []
+        # Container for activity variables which will be charged negative penalty for being present
+        self.secondChoiceActivityVars = []
+        # This variable will contain model's objective variable which will be used to find the optimal solution
+        self.objectiveScoreVar = None
+        # Container to store extra variables to pass to solution printer
         self.extraVariables = {}
+
+        # Finally create the actual model variables and constraints
+        self._addActivities()
 
 
     class ScheduleTasksSolutionsPrinter(cp_model.CpSolverSolutionCallback):
         """Print intermediate solutions."""
 
-        def __init__(self, activityVars, objVar, extraVariables):
+        def __init__(self, activityVars, objScoreVar, extraVariables):
             cp_model.CpSolverSolutionCallback.__init__(self)
             self._activity_vars = activityVars
-            self._obj_var = objVar
+            self._obj_score_var = objScoreVar
             self._solution_count = 0
             self._extra_variables = extraVariables
 
@@ -37,7 +42,10 @@ class ScheduleTasks:
         def OnSolutionCallback(self):
             self._solution_count += 1
 
-            print('Obj Value: ', self.Value(self._obj_var), '\n')
+            for key, var in self._extra_variables.items():
+                print(key, ': ', self.Value(var))
+
+            print('Objective Score: ', self.Value(self._obj_score_var), '\n')
             sortedActivities = sorted(self._activity_vars, key=lambda act: self.Value(act.start))
             for activityVar in sortedActivities:
                 if self.Value(activityVar.isPresent):
@@ -54,13 +62,14 @@ class ScheduleTasks:
                         '\t' + activityVar.data.name + '\t\tNot fitted')
             print('**************************')
 
+
         def solutionCount(self):
             return self._solution_count
 
 
     def solve(self):
         # Creates solution printer callback to be passed to solver
-        solutionPrinter = self.ScheduleTasksSolutionsPrinter(self.activityVars, self.objVar, self.extraVariables)
+        solutionPrinter = self.ScheduleTasksSolutionsPrinter(self.activityVars, self.objectiveScoreVar, self.extraVariables)
         # solve
         # status = self.solver.SearchForAllSolutions(self.model, solutionPrinter)
 
@@ -73,52 +82,183 @@ class ScheduleTasks:
         print('Number of solutions found: %i' % solutionPrinter.solutionCount())
         print('Time Taken: ', round(end-start, 3), 'seconds')
 
-    def addActivities(self, activities):
+    def _addActivities(self):
+        # create group dictionary to easily access group by name
+        activityGroupsByName = {}
+        for group in self.userData['activity-groups']:
+            activityGroupsByName[group.name] = group
+        # Separate high and low disturbance times
+        highDisturbanceTimes = [dis for dis in self.userData['disturbance-marked-times'] if dis.disturbance == 'high']
+        lowDisturbanceTimes = [dis for dis in self.userData['disturbance-marked-times'] if dis.disturbance == 'low']
+
         # creating on the fly class to store activity variables
         ActivityVar = collections.namedtuple('ActivityVars', 'start, end, interval, isPresent, data')
 
-        for _, activity in enumerate(activities):
+        # Add buffer constraints
+        buffers = self.userData['buffer-times']
+        for buffer in buffers:
+            self._addBuffer(buffer, ActivityVar)
 
-            # Priority 1 - If Activity Start time is given
+        # Add activity data to OR-tools model
+        activities = self.userData['activities']
+
+        for activity in activities:
+            # 1 - If Activity Start time is given
             if activity.startTime is not None:
-                start = activity.startTime
-                end = activity.startTime + activity.duration
+                self._addActivityWithStartTime(activity, ActivityVar)
             else:
-                # Priority 2 - Put activity inside activity group's prefered slot
-                if activity.group is not None:
-                    groupStartTime, groupEndTime = ActivityGroup.start[activity.group], ActivityGroup.end[activity.group]
-                    start = self.model.NewIntVar(groupStartTime, groupEndTime, 'start ' + activity.name)
-                    end = self.model.NewIntVar(groupStartTime, groupEndTime, 'end ' + activity.name)
-                # If no start time or group time, let activity float anywhere in the entire schedule time period
-                else:
-                    start = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'start ' + activity.name)
-                    end = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'end ' + activity.name)
+                self._addActivityWithoutStartTime(
+                    activity,
+                    activityGroupsByName,
+                    highDisturbanceTimes,
+                    lowDisturbanceTimes,
+                    ActivityVar
+                )
 
-            isPresent = self.model.NewBoolVar('is present ' + activity.name)
-            interval = self.model.NewOptionalIntervalVar(start, activity.duration, end, isPresent, 'interval ' + activity.name)
-
-            activityVar = ActivityVar(start=start, end=end, interval=interval, isPresent=isPresent, data=activity)
-            self.activityVars.append(activityVar)
-
+        # Ensure no activities overlap
         intervalVars = [activityVar.interval for activityVar in self.activityVars]
         self.model.AddNoOverlap(intervalVars)
 
+        # Ensure no Priority n activities are scheduled if all Priority (n-1) activities are not scheduled
+        self._addPriorityConstraint()
+
         # Main objective function that penalizes unwanted behavior
         # OR-Tools library will minimize this function to find the optimal solution
-        self.objVar = self.cpObjectiveFunction()
-        self.model.Minimize(self.objVar)
+        self.objectiveScoreVar = self._cpObjectiveFunction()
+        self.model.Minimize(self.objectiveScoreVar)
 
+    def _addBuffer(self, buffer, ActivityVar):
+        if buffer.startTime is not None:
+            start = buffer.startTime
+            end = buffer.startTime + buffer.duration
+        else:
+            start = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'start ' + buffer.name)
+            end = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'end ' + buffer.name)
 
-    def cpObjectiveFunction(self):
+        isPresent = self.model.NewBoolVar('is present ' + buffer.name)
+        interval = self.model.NewOptionalIntervalVar(start, buffer.duration, end, isPresent, 'interval ' + buffer.name)
+
+        # Store newly created model variables for later access
+        buffer.priority = 1
+        bufferVar = ActivityVar(start=start, end=end, interval=interval, isPresent=isPresent, data=buffer)
+        self.activityVars.append(bufferVar)
+
+    def _addActivityWithStartTime(self, activity, ActivityVar):
+        start = activity.startTime
+        end = activity.startTime + activity.duration
+        isPresent = self.model.NewBoolVar('is present ' + activity.name)
+        # Optional interval for soft constraint
+        interval = self.model.NewOptionalIntervalVar(start, activity.duration, end, isPresent, 'interval ' + activity.name)
+        # Store newly created model variables for later access
+        activityVar = ActivityVar(start=start, end=end, interval=interval, isPresent=isPresent, data=activity)
+        self.activityVars.append(activityVar)
+
+    def _addActivityWithoutStartTime(self, activity, activityGroupsByName, highDisturbanceTimes, lowDisturbanceTimes, ActivityVar):
+        
+        # Interval if group
+        if activity.groupName is not None:
+            group = activityGroupsByName[activity.groupName]
+            start = self.model.NewIntVar(group.startTime, group.endTime, 'start ' + activity.name)
+            end = self.model.NewIntVar(group.startTime, group.endTime, 'end ' + activity.name)
+        # Interval if no group
+        else:
+            start = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'start ' + activity.name)
+            end = self.model.NewIntVar(self.startScheduleTime, self.endScheduleTime, 'end ' + activity.name)
+
+        isPresent = self.model.NewBoolVar('is present ' + activity.name)
+        # Optional interval for soft constraint
+        interval = self.model.NewOptionalIntervalVar(start, activity.duration, end, isPresent, 'interval ' + activity.name)
+        # Store newly created model variables for later access
+        activityVar = ActivityVar(start=start, end=end, interval=interval, isPresent=isPresent, data=activity)
+        self.activityVars.append(activityVar)
+        if activity.groupName is None:
+            self.secondChoiceActivityVars.append(activityVar)
+
+        # Make more intervals using disturbed high/low times
+        if not activity.attentionRequired == 2:
+            # Array to use to ensure only one of these multiple intervals is fitted
+            allIsPresents = [isPresent]
+            if activity.attentionRequired == 1:
+                for disTime in lowDisturbanceTimes:
+                    start2 = self.model.NewIntVar(disTime.startTime, disTime.endTime, '')
+                    end2 = self.model.NewIntVar(disTime.startTime, disTime.endTime, '')
+                    isPresent2 = self.model.NewBoolVar('is present ' + activity.name)
+                    # Optional interval for soft constraint
+                    interval2 = self.model.NewOptionalIntervalVar(start2, activity.duration, end2, isPresent2, 'interval ' + activity.name)
+                    # Store newly created model variables for later access
+                    activityVar2 = ActivityVar(start=start2, end=end2, interval=interval2, isPresent=isPresent2, data=activity)
+                    self.activityVars.append(activityVar2)
+                    allIsPresents.append(isPresent2)
+                    if activity.groupName is not None:
+                        self.secondChoiceActivityVars.append(activityVar2)
+
+            if activity.attentionRequired == 3:
+                for disTime in highDisturbanceTimes:
+                    start2 = self.model.NewIntVar(disTime.startTime, disTime.endTime, '')
+                    end2 = self.model.NewIntVar(disTime.startTime, disTime.endTime, '')
+                    isPresent2 = self.model.NewBoolVar('is present ' + activity.name)
+                    # Optional interval for soft constraint
+                    interval2 = self.model.NewOptionalIntervalVar(start2, activity.duration, end2, isPresent2, 'interval ' + activity.name)
+                    # Store newly created model variables for later access
+                    activityVar2 = ActivityVar(start=start2, end=end2, interval=interval2, isPresent=isPresent2, data=activity)
+                    self.activityVars.append(activityVar2)
+                    allIsPresents.append(isPresent2)
+                    if activity.groupName is not None:
+                        self.secondChoiceActivityVars.append(activityVar2)
+            # Make sure at most only 1 of any of these intervals is fitted
+            self.model.Add(sum(allIsPresents) <= 1)
+    
+    def _addPriorityConstraint(self):
+        self.model.Add
+        nbuffers = len([act for act in self.userData['buffer-times']])
+        npriority1Activities = len([act for act in self.userData['activities'] if act.priority == 1])
+        npriority2Activities = len([act for act in self.userData['activities'] if act.priority == 2])
+        # npriority3Activities = len([act for act in self.userData['activities'] if act.priority == 3])
+
+        priority1sPresent = self.model.NewIntVar(0, npriority1Activities, '')
+        priority1sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 1])
+        self.model.Add(priority1sPresent == priority1sPresentSummed)
+        self.extraVariables['1present'] = priority1sPresentSummed
+
+        # priority2sPresent = self.model.NewIntVar(0, npriority2Activities, '')
+        # priority2sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 2])
+        # self.model.Add(priority2sPresent == priority2sPresentSummed)
+        # # priority2sPresent = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 2])
+        # # priority3sPresent = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 3])
+
+        # priority1sNotPresent = self.model.NewIntVar(0, npriority1Activities, '')
+        # self.model.Add(priority1sNotPresent == nbuffers + npriority1Activities - priority1sPresent)
+        # priority2sNotPresent = self.model.NewIntVar(0, npriority2Activities, '')
+        # self.model.Add(priority2sNotPresent == npriority2Activities - priority2sPresent)
+
+        # toBeZero12 = self.model.NewIntVar(0, 0, '')
+        # self.model.AddProdEquality(toBeZero12, [priority1sNotPresent, priority2sPresent])
+        # # self.model.Add(toBeZero12 == 0)
+
+        # # toBeZero13 = self.model.NewIntVar(0, 0, '')
+        # # self.model.AddProdEquality(toBeZero13, [priority1sNotPresent, priority3sPresent])
+        # # self.model.Add(toBeZero13 == 0)
+
+        # # toBeZero23 = self.model.NewIntVar(0, 0, '')
+        # # self.model.AddProdEquality(toBeZero23, [priority2sNotPresent, priority3sPresent])
+        # # self.model.Add(toBeZero23 == 0)
+
+        
+
+    def _cpObjectiveFunction(self):
         finalObjVar = 0
 
         # Adding penalty to activities for not being present
         activitiesNotPresentPenalty = self.getActivitiesNotPresentPenalty()
-        finalObjVar += 100 * activitiesNotPresentPenalty
+        finalObjVar += 1200 * activitiesNotPresentPenalty
 
-        # Adding penalty to activities which switch order
-        activitiesOrderChangedPenalty = self.getActivitiesOrderChangedPenalty()
-        finalObjVar += activitiesOrderChangedPenalty
+        # # Adding penalty to activities for being fitted to lesser wanted options
+        # activitiesFittedToSecondChoiceTimesPenalty = self.getActivitiesFittedToSecondChoiceTimesPenalty()
+        # finalObjVar += 120 * activitiesFittedToSecondChoiceTimesPenalty
+
+        # # Adding penalty to activities which switch order
+        # activitiesOrderChangedPenalty = self.getActivitiesOrderChangedPenalty()
+        # finalObjVar += activitiesOrderChangedPenalty
 
         # Adding penalty for activities for not starting immediately after the next one
         activitiesNotPushedFrontPenalty = self.getActivitiesInBetweenGapsPenalty()
@@ -127,10 +267,21 @@ class ScheduleTasks:
         return finalObjVar
 
     def getActivitiesNotPresentPenalty(self):
-        # Weighted penalties by priority (lower priority number == greater penalty)
-        return sum([(int(120 / actVar.data.priority) * (1 - actVar.isPresent)) for actVar in self.activityVars])
-        # Weighted penalties by priority (lower priority number == greater penalty) and duration
-        # return sum([(int(120 / actVar.data.priority) * (1 - actVar.isPresent) * actVar.data.duration) for actVar in self.activityVars])
+        # penaltyByPriority = {
+        #     1: 14400,
+        #     2: 120,
+        #     3: 1
+        # }
+        # # Weighted penalties by priority (lower priority number == greater penalty)
+        # return sum(
+        #     [(int(penaltyByPriority[int(actVar.data.priority)]) * (1 - actVar.isPresent))
+        #                 for actVar in self.activityVars]
+        # )
+        return sum( [(1 - actVar.isPresent) for actVar in self.activityVars] )
+
+    def getActivitiesFittedToSecondChoiceTimesPenalty(self):
+        return sum([act.isPresent for act in self.secondChoiceActivityVars])
+
 
     def getActivitiesOrderChangedPenalty(self):
         nextElementBefore = []
@@ -221,16 +372,6 @@ class ScheduleTasks:
             actStartAndPreviousActEndDifs.append(actStartAndPreviousActEndDifWeighted)
         return sum(actStartAndPreviousActEndDifs)
 
-
-# For now, one time unit is 5 min so 12 units / hour
-# Time period is 10 hours
-scheduleTimeUnits = 120
-
-scheduler = ScheduleTasks(scheduleTimeUnits)
-
-scheduler.addActivities(case10)
-
-scheduler.solve()
 
 
 

@@ -36,3 +36,17 @@
     #         self.model.AddProdEquality(isPresentStart, [actVar.start, actVar.isPresent])
     #         presentIntervalsStart.append(isPresentStart)
     #     return sum([start for start in presentIntervalsStart])
+
+
+
+    # def getActivitiesNotPresentPenalty(self):
+    #     penaltyByPriority = {
+    #         1: 14400,
+    #         2: 120,
+    #         3: 1
+    #     }
+    #     # Weighted penalties by priority (lower priority number == greater penalty)
+    #     return sum(
+    #         [(int(penaltyByPriority[int(actVar.data.priority)]) * (1 - actVar.isPresent))
+    #                     for actVar in self.activityVars]
+    #     )
