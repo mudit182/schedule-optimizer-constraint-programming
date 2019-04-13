@@ -1,4 +1,4 @@
-from input_interfaces import ScheduleTime, BufferTime, Activity, ActivityGroup
+from input_interfaces import createInputShell, ScheduleTime, BufferTime, Activity, ActivityGroup
 
 
 # Activities to test model with
@@ -12,184 +12,164 @@ case = {
         BufferTime(20, 10)
     ],
     'activities' : [
-        Activity('A', 16),
-        Activity('B', 5),
-        Activity('C', 10),
-        Activity('Z', 10, startTime=70)
+        # Activity('A', 16, startTime=30, priority=1),
+        Activity('B', 5, priority=2),
+        Activity('C', 10, groupName='email', priority=1),
+        Activity('D', 5, groupName='interview'),
+        Activity('Z', 10, startTime=70, priority=1)
     ],
-    'activity-groups': [],
+    'activity-groups': [
+        ActivityGroup('email', 40, 60),
+        ActivityGroup('interview', 40, 80)
+    ],
     'disturbance-marked-times': []
 }
 
-# Case1 to Case6 - Test objective function's individual components
-# Each case forces a single penalty component to produce a penalty
 
-# Activity 'C' won't be fitted
-# Expected objective score = (120 / 5) * 100 = 2400
-case1 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'buffer-times': [],
-    'activities' : [
-        Activity('A', 50),
-        Activity('B', 40),
-        Activity('C', 90)
-    ],
-    'activity-groups': []
-}
 
-# Activity 'C' won't be fitted
-# Expected objective score = (120 / 3) * 100 = 4000
-case2 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 50, priority=3),
-        Activity('B', 40, priority=3),
-        Activity('C', 90, priority=3)
-    ]
-}
+# In case of conflicting activities, only 1 gets scheduled
+case1 = createInputShell()
+case1['activities'] = [
+    Activity('A', 10, startTime=30),
+    Activity('B', 5, startTime=30)
+]
 
-# Activities order will be changed : 
-# 'B' will not be followed by 'C'
-# Expected objective score = 1
-case3 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 5, priority=3),
-        Activity('B', 4, priority=3),
-        Activity('C', 3, priority=3, startTime=5)
-    ]
-}
 
-# Activities order will be changed :
-# 'A' will not be followed by 'B'
-# 'B' will not be followed by 'C'
-# Expected objective score = 2
-case4 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 10, priority=3),
-        Activity('B', 5, priority=3, startTime=30),
-        Activity('C', 30, priority=3, startTime=0),
-    ]
-}
-
-# There will be a time gap of 10 min after A ends and B starts
-# Expected objective score = (num_of_activities_after_B + 1) * (lag time of B) = 1 * 10 = 10
-case5 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 10),
-        Activity('B', 5, startTime=20)
-    ]
-}
-
-# There will be a time gap of 10 min after A ends and B starts
-# However, unlike case 5 there is 1 activity after B
-# Expected objective score = (num_of_activities_after_B + 1) * (lag time of B) = 2 * 10 = 20
-case6 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 10),
-        Activity('B', 5, startTime=20),
-        Activity('C', 15, startTime=25)
-    ]
-}
-
-# There is 10 min lag time for activity A, activity B, and activity C
-# Penalty for activity A = (num_of_activities_after_A + 1) * (lag time of A)=  3 * 10 = 30
-# Penalty for activity B = (num_of_activities_after_B + 1) * (lag time of B) = 2 * 10 = 20
-# Penalty for activity A = (num_of_activities_after_C + 1) * (lag time of C) = 1 * 10 = 10
-# Expected objective score = 60
-case7 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities' : [
-        Activity('A', 10, startTime=10),
-        Activity('B', 10, startTime=30),
-        Activity('C', 10, startTime=50),
-    ]
-}
-
-# Case to test that activities are pushed to front and order is maintained
-# if no startTime or group is specified
-case8 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
-    'activities': [
-        Activity('A', 15),
-        Activity('B', 3),
-        Activity('C', 20, priority=1),
-        Activity('D', 7, priority=3),
-        Activity('E', 10)
-    ]
-}
+# In case of conflicting activities times, events with higher priority get scheduled
+# Start time fixed
+case2 = createInputShell()
+case2['activities'] = [
+    Activity('A', 10, startTime=30, priority=3),
+    Activity('B', 5, startTime=30, priority=1),
+    Activity('C', 2, startTime=30, priority=2),
+]
 
 
 
-# Case to test that activities with higher priority are scheduled over activities with lower priorities
-# Notice that Activity D is scheduled instead of Activity F 
-# (both D and F have same priority and duration but D is defined before)
-case9 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
+# In case of more activities than available time, events with higher priority get scheduled
+# No Start time provided
+case3 = createInputShell()
+case3['activities'] = [
+    Activity('A', 70, priority=3),
+    Activity('B', 30, priority=1),
+    Activity('C', 30, priority=2),
+]
 
-    'activity-groups': [],
 
-    'activities': [
-        Activity('A', 29, priority=2),
-        Activity('B', 29, priority=2),
-        Activity('C', 29, priority=1),
-        Activity('D', 29, priority=3),
-        Activity('E', 29, priority=1),
-        Activity('F', 29, priority=3),
-        Activity('G', 29, priority=2),
-        Activity('H', 29, priority=2)
-    ]
-}
 
-case10 = {
-    'schedule-time': [
-        ScheduleTime(0, 120)
-    ],
+# Higher priority activities get scheduled over lower priority ones 
+case4 = createInputShell()
+case4['activities'] = [
+    Activity('A', 10, priority=3),
+    Activity('B', 30, priority=1),
+    Activity('C', 20, priority=2),
+    Activity('D', 50, priority=3),
+    Activity('E', 5, priority=1),
+    Activity('F', 10, priority=1),
+    Activity('G', 15, priority=2),
+    Activity('H', 25, priority=3),
+    Activity('I', 20, priority=1)
+]
 
-    'activity-groups': [
-        ActivityGroup('email', 30, 80)
-    ],
 
-    'activities': [
-        Activity('A', 10),
-        Activity('B', 9, groupName='email'),
-        Activity('C', 3, groupName='email'),
-        Activity('D', 14),
-        Activity('E', 9),
-        Activity('F', 5, groupName='email'),
-    ]
-}
 
-case11 = {}
+# In case of priority 1 activities not being scheduled, no priority 2 or 3 activities are scheduled
+case5 = createInputShell()
+case5['activities'] = [
+    Activity('A', 50, priority=1),
+    Activity('B', 40, priority=1),
+    Activity('C', 50, priority=1),
+    Activity('D', 20, priority=2),
+    Activity('E', 10, priority=2),
+    Activity('F', 10, priority=3),
+]
 
 
 
 
+# In case of priority 2 activities not being scheduled, no priority 3 activities are scheduled
+case6 = createInputShell()
+case6['activities'] = [
+    Activity('A', 10, priority=1),
+    Activity('B', 20, priority=1),
+    Activity('C', 50, priority=2),
+    Activity('D', 60, priority=2),
+    Activity('B', 70, priority=2),
+    Activity('E', 10, priority=3),
+]
+
+
+# Only priority 2 activities are provided they are scheduled normally
+case7 = createInputShell()
+case7['activities'] = [
+    Activity('A', 10, priority=2),
+    Activity('B', 20, priority=2),
+]
 
 
 
+# Only priority 3 activities are provided they are scheduled normally
+case7 = createInputShell()
+case7['activities'] = [
+    Activity('A', 10, priority=3),
+    Activity('B', 20, priority=3),
+]
 
 
+
+# Only priority 1 and 3 activities are provided they are scheduled normally
+case7 = createInputShell()
+case7['activities'] = [
+    Activity('A', 10, priority=1),
+    Activity('B', 20, priority=3),
+    Activity('C', 30, priority=3),
+]
+
+
+
+# Activities with groupName is scheduled inside group's alloted time
+case8 = createInputShell()
+case8['activities'] = [
+    Activity('A', 10, groupName='email'),
+    Activity('B', 5, groupName='email'),
+]
+case8['activity-groups'] = [
+    ActivityGroup('email', 40, 60),
+]
+
+
+
+# Activities with groupName is scheduled inside group's alloted time
+# Activities that cannot fit inside alloted group time are not scheduled
+case9 = createInputShell()
+case9['activities'] = [
+    Activity('A', 10, groupName='email'),
+    Activity('B', 5, groupName='email'),
+    Activity('C', 20, groupName='email'),
+]
+case9['activity-groups'] = [
+    ActivityGroup('email', 40, 60),
+]
+
+
+
+# Multiple groups and also activities without groups
+# Activities with groupName is scheduled inside group's alloted time
+# Activities that cannot fit inside alloted group time are not scheduled
+case9 = createInputShell()
+case9['activities'] = [
+    Activity('A', 10, groupName='email'),
+    Activity('B', 5, groupName='email'),
+    Activity('C', 20, groupName='email'),
+    Activity('D', 15, groupName='interview'),
+    Activity('E', 15, groupName='interview'),
+    Activity('F', 45, groupName='interview'),
+    Activity('G', 5),
+    Activity('H', 15),
+]
+case9['activity-groups'] = [
+    ActivityGroup('email', 40, 60),
+    ActivityGroup('interview', 50, 90),
+]
 
 

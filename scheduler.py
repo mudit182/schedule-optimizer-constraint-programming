@@ -171,7 +171,7 @@ class ScheduleTasks:
         # Store newly created model variables for later access
         activityVar = ActivityVar(start=start, end=end, interval=interval, isPresent=isPresent, data=activity)
         self.activityVars.append(activityVar)
-        if activity.groupName is None:
+        if activity.groupName is None and activity.attentionRequired != 2:
             self.secondChoiceActivityVars.append(activityVar)
 
         # Make more intervals using disturbed high/low times
@@ -209,39 +209,43 @@ class ScheduleTasks:
             self.model.Add(sum(allIsPresents) <= 1)
     
     def _addPriorityConstraint(self):
-        self.model.Add
         nbuffers = len([act for act in self.userData['buffer-times']])
         npriority1Activities = len([act for act in self.userData['activities'] if act.priority == 1])
         npriority2Activities = len([act for act in self.userData['activities'] if act.priority == 2])
-        # npriority3Activities = len([act for act in self.userData['activities'] if act.priority == 3])
+        npriority3Activities = len([act for act in self.userData['activities'] if act.priority == 3])
 
-        priority1sPresent = self.model.NewIntVar(0, npriority1Activities, '')
+        # Define 2 variables for number of priority 1 activities present and not present
+        priority1sPresent = self.model.NewIntVar(0, npriority1Activities + nbuffers, '')
         priority1sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 1])
         self.model.Add(priority1sPresent == priority1sPresentSummed)
-        self.extraVariables['1present'] = priority1sPresentSummed
+        priority1sNotPresent = self.model.NewIntVar(0, npriority1Activities, '')
+        self.model.Add(priority1sNotPresent == nbuffers + npriority1Activities - priority1sPresent)
 
-        # priority2sPresent = self.model.NewIntVar(0, npriority2Activities, '')
-        # priority2sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 2])
-        # self.model.Add(priority2sPresent == priority2sPresentSummed)
-        # # priority2sPresent = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 2])
-        # # priority3sPresent = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 3])
+        # Define 2 variables for number of priority 2 activities present and not present
+        priority2sPresent = self.model.NewIntVar(0, npriority2Activities, '')
+        priority2sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 2])
+        self.model.Add(priority2sPresent == priority2sPresentSummed)
+        priority2sNotPresent = self.model.NewIntVar(0, npriority2Activities, '')
+        self.model.Add(priority2sNotPresent == npriority2Activities - priority2sPresent)
 
-        # priority1sNotPresent = self.model.NewIntVar(0, npriority1Activities, '')
-        # self.model.Add(priority1sNotPresent == nbuffers + npriority1Activities - priority1sPresent)
-        # priority2sNotPresent = self.model.NewIntVar(0, npriority2Activities, '')
-        # self.model.Add(priority2sNotPresent == npriority2Activities - priority2sPresent)
+        priority3sPresent = self.model.NewIntVar(0, npriority3Activities, '')
+        priority3sPresentSummed = sum([actVar.isPresent for actVar in self.activityVars if actVar.data.priority == 3])
+        self.model.Add(priority3sPresent == priority3sPresentSummed)
 
-        # toBeZero12 = self.model.NewIntVar(0, 0, '')
-        # self.model.AddProdEquality(toBeZero12, [priority1sNotPresent, priority2sPresent])
-        # # self.model.Add(toBeZero12 == 0)
+        priority1sNotPresent = self.model.NewIntVar(0, npriority1Activities, '')
+        self.model.Add(priority1sNotPresent == nbuffers + npriority1Activities - priority1sPresent)
 
-        # # toBeZero13 = self.model.NewIntVar(0, 0, '')
-        # # self.model.AddProdEquality(toBeZero13, [priority1sNotPresent, priority3sPresent])
-        # # self.model.Add(toBeZero13 == 0)
+        toBeZero12 = self.model.NewIntVar(0, 0, '')
+        self.model.AddProdEquality(toBeZero12, [priority1sNotPresent, priority2sPresent])
+        self.model.Add(toBeZero12 == 0)
 
-        # # toBeZero23 = self.model.NewIntVar(0, 0, '')
-        # # self.model.AddProdEquality(toBeZero23, [priority2sNotPresent, priority3sPresent])
-        # # self.model.Add(toBeZero23 == 0)
+        toBeZero13 = self.model.NewIntVar(0, 0, '')
+        self.model.AddProdEquality(toBeZero13, [priority1sNotPresent, priority3sPresent])
+        self.model.Add(toBeZero13 == 0)
+
+        toBeZero23 = self.model.NewIntVar(0, 0, '')
+        self.model.AddProdEquality(toBeZero23, [priority2sNotPresent, priority3sPresent])
+        self.model.Add(toBeZero23 == 0)
 
         
 
@@ -250,36 +254,29 @@ class ScheduleTasks:
 
         # Adding penalty to activities for not being present
         activitiesNotPresentPenalty = self.getActivitiesNotPresentPenalty()
-        finalObjVar += 1200 * activitiesNotPresentPenalty
+        finalObjVar += activitiesNotPresentPenalty
 
-        # # Adding penalty to activities for being fitted to lesser wanted options
-        # activitiesFittedToSecondChoiceTimesPenalty = self.getActivitiesFittedToSecondChoiceTimesPenalty()
-        # finalObjVar += 120 * activitiesFittedToSecondChoiceTimesPenalty
+        # Adding penalty to activities for being fitted to lesser wanted options
+        activitiesFittedToSecondChoiceTimesPenalty = self.getActivitiesFittedToSecondChoiceTimesPenalty()
+        finalObjVar += 120 * activitiesFittedToSecondChoiceTimesPenalty
 
         # # Adding penalty to activities which switch order
         # activitiesOrderChangedPenalty = self.getActivitiesOrderChangedPenalty()
         # finalObjVar += activitiesOrderChangedPenalty
 
-        # Adding penalty for activities for not starting immediately after the next one
-        activitiesNotPushedFrontPenalty = self.getActivitiesInBetweenGapsPenalty()
-        finalObjVar += activitiesNotPushedFrontPenalty
+        # # Adding penalty for activities for not starting immediately after the next one
+        # activitiesNotPushedFrontPenalty = self.getActivitiesInBetweenGapsPenalty()
+        # finalObjVar += activitiesNotPushedFrontPenalty
 
         return finalObjVar
 
     def getActivitiesNotPresentPenalty(self):
-        # penaltyByPriority = {
-        #     1: 14400,
-        #     2: 120,
-        #     3: 1
-        # }
-        # # Weighted penalties by priority (lower priority number == greater penalty)
-        # return sum(
-        #     [(int(penaltyByPriority[int(actVar.data.priority)]) * (1 - actVar.isPresent))
-        #                 for actVar in self.activityVars]
-        # )
         return sum( [(1 - actVar.isPresent) for actVar in self.activityVars] )
 
     def getActivitiesFittedToSecondChoiceTimesPenalty(self):
+        for i, actVar in enumerate(self.secondChoiceActivityVars):
+            self.extraVariables[str(i) + actVar.data.name] = actVar.data.duration
+
         return sum([act.isPresent for act in self.secondChoiceActivityVars])
 
 
